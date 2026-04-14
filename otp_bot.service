@@ -1,0 +1,27 @@
+[Unit]
+Description=OTP Telegram Bot
+Documentation=https://github.com/your-repo/otp-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# ── Change these paths to match your server ──────────────────────
+User=botuser
+WorkingDirectory=/home/botuser/otp_bot
+ExecStart=/home/botuser/otp_bot/venv/bin/python main.py
+# ─────────────────────────────────────────────────────────────────
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=otp_bot
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/botuser/otp_bot
+
+[Install]
+WantedBy=multi-user.target
