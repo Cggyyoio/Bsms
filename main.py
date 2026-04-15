@@ -1,5 +1,6 @@
 """
 main.py — OTP Bot Entry Point (Durian Only)
+pyTelegramBotAPI (asyncio) version
 """
 from __future__ import annotations
 
@@ -7,18 +8,14 @@ import asyncio
 import logging
 import sys
 
-from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+import telebot
+from telebot.async_telebot import AsyncTeleBot
+from telebot.asyncio_storage import StateMemoryStorage
 
 from config import config
 from countries_manager import countries_manager
 from database import db
 from durian_api import get_client
-from middlewares import UserMiddleware
-from handlers import user as user_handlers
-from handlers import admin as admin_handlers
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,17 +28,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ── Bot singleton (يُستورد من الـ handlers) ───────────────────────
+bot = AsyncTeleBot(
+    token=config.bot_token,
+    state_storage=StateMemoryStorage(),
+    parse_mode="HTML",
+)
 
-async def on_startup(bot: Bot) -> None:
+
+async def on_startup() -> None:
     await db.connect()
     countries_manager.load("countries.json")
 
-    # تهيئة نظام التسعير
     from pricing import pricing
     pricing.init(db)
     await pricing.seed_defaults()
 
-    # تهيئة قناة الإشعارات
     from notifier import init_notifier
     ch_id   = await db.get_setting("notif_channel_id",   "")
     ch_link = await db.get_setting("notif_channel_link", "")
@@ -53,10 +55,10 @@ async def on_startup(bot: Bot) -> None:
     logger.info("Bot started: @%s", me.username)
 
 
-async def on_shutdown(bot: Bot) -> None:
+async def on_shutdown() -> None:
     await db.close()
-    from durian_api import get_client
-    await get_client().close()
+    from durian_api import get_client as gc
+    await gc().close()
     logger.info("Bot stopped.")
 
 
@@ -65,21 +67,21 @@ async def main() -> None:
         logger.critical("BOT_TOKEN not set!")
         sys.exit(1)
 
-    bot = Bot(
-        token=config.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
-    dp = Dispatcher(storage=MemoryStorage())
+    # تسجيل الـ middleware
+    from middlewares import UserMiddleware
+    bot.setup_middleware(UserMiddleware())
 
-    dp.update.middleware(UserMiddleware())
-    dp.include_router(user_handlers.router)
-    dp.include_router(admin_handlers.router)
+    # تسجيل كل الـ handlers
+    from handlers import register_all
+    register_all(bot)
 
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
+    await on_startup()
 
     logger.info("Starting polling…")
-    await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+    try:
+        await bot.infinity_polling(allowed_updates=["message", "callback_query"])
+    finally:
+        await on_shutdown()
 
 
 if __name__ == "__main__":

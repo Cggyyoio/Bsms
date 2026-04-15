@@ -1,14 +1,11 @@
 """
-crypto_pay.py — BEP20 + TRC20 payment handler (aiogram v3)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BEP20: BSC Public RPC — مجاني 100%
-TRC20: TronGrid API — مجاني رسمي
+crypto_pay.py — BEP20 + TRC20 payment handler (telebot)
 """
 from __future__ import annotations
 import asyncio, hashlib, logging, time
 from typing import Optional
 import aiohttp
-from aiogram.types import CallbackQuery, Message
+from telebot.types import Message, CallbackQuery
 
 logger = logging.getLogger(__name__)
 
@@ -194,10 +191,6 @@ class CryptoPayHandler:
         self.db  = db
         self.bot = bot
 
-    def _bep20_client(self):
-        addr = self.db._conn and None  # async — use get_setting
-        return None  # resolved async in show_pay_page
-
     async def is_bep20_enabled(self):
         return (await self.db.get_setting("pay_bep20") == "1"
                 and bool((await self.db.get_setting("bep20_address", "")).strip()))
@@ -208,11 +201,10 @@ class CryptoPayHandler:
                 and bool((await self.db.get_setting("trc20_address", "")).strip()))
 
     async def show_pay_page(self, chat_id: int, user_id: int, network: str):
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        from keyboards import kb_crypto_pay
         from strings import t
-
         lang = await self.db.get_user_lang(user_id)
+
         if network == "bep20":
             if not await self.is_bep20_enabled():
                 await self.bot.send_message(chat_id, "⛔ BEP20 متوقف حالياً.")
@@ -230,30 +222,25 @@ class CryptoPayHandler:
             rate      = await self.db.get_setting("trc20_usdt_rate", "1.00")
             net_label = "TRC20 (TRON)"
 
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(text="✅ أرسلت المبلغ", callback_data=f"crypto_sent:{network}"))
-        b.row(InlineKeyboardButton(text="📋 نسخ العنوان",  callback_data=f"crypto_copy:{network}"))
-        b.row(InlineKeyboardButton(text="🔙 رجوع",          callback_data="menu:add_balance"))
-
         await self.bot.send_message(
             chat_id,
             t("pay_page", lang, network=net_label, address=address,
               min_usdt=min_usdt, rate=rate),
-            reply_markup=b.as_markup(),
+            reply_markup=kb_crypto_pay(network, lang),
             parse_mode="HTML",
         )
 
     async def prompt_txid(self, call: CallbackQuery, network: str):
-        uid = call.from_user.id
-        cid = call.message.chat.id
+        uid  = call.from_user.id
+        cid  = call.message.chat.id
         lang = await self.db.get_user_lang(uid)
         _session_start(uid, network)
         await self.bot.send_message(cid, t("pay_send_txid", lang))
+        from strings import t as _t  # already imported
 
     async def handle_copy_address(self, call: CallbackQuery, network: str):
         setting = "bep20_address" if network == "bep20" else "trc20_address"
         address = await self.db.get_setting(setting, "")
-        lang    = await self.db.get_user_lang(call.from_user.id)
         await self.bot.send_message(
             call.message.chat.id,
             f"📋 <b>عنوان USDT:</b>\n\n<code>{address}</code>",
@@ -268,6 +255,7 @@ class CryptoPayHandler:
         return await self._handle_txid(message, state["network"])
 
     async def _handle_txid(self, message: Message, network: str) -> bool:
+        from strings import t
         uid  = message.from_user.id
         cid  = message.chat.id
         txid = (message.text or "").strip()
@@ -283,28 +271,29 @@ class CryptoPayHandler:
                                                 parse_mode="HTML")
         try:
             if network == "bep20":
-                addr    = await self.db.get_setting("bep20_address", "")
-                conf    = int(await self.db.get_setting("bep20_confirmations", "3"))
-                client  = BEP20Client(addr, conf)
+                addr   = await self.db.get_setting("bep20_address", "")
+                conf   = int(await self.db.get_setting("bep20_confirmations", "3"))
+                client = BEP20Client(addr, conf)
             else:
-                key     = await self.db.get_setting("trc20_api_key", "")
-                addr    = await self.db.get_setting("trc20_address", "")
-                conf    = int(await self.db.get_setting("trc20_confirmations", "19"))
-                client  = TRC20Client(key, addr, conf)
+                key    = await self.db.get_setting("trc20_api_key", "")
+                addr   = await self.db.get_setting("trc20_address", "")
+                conf   = int(await self.db.get_setting("trc20_confirmations", "19"))
+                client = TRC20Client(key, addr, conf)
 
             result = await client.verify(txid)
 
             if not result.get("success"):
                 await self.bot.edit_message_text(
-                    f"❌ {result.get('error', 'خطأ')}", cid, check_msg.message_id
+                    f"❌ {result.get('error', 'خطأ')}",
+                    cid, check_msg.message_id,
                 )
                 return True
 
-            paid       = result["amount"]
-            rate_key   = "bep20_usdt_rate" if network == "bep20" else "trc20_usdt_rate"
-            min_key    = "bep20_min_usdt"  if network == "bep20" else "trc20_min_usdt"
-            rate       = float(await self.db.get_setting(rate_key, "1.00"))
-            min_usdt   = float(await self.db.get_setting(min_key, "1.00"))
+            paid     = result["amount"]
+            rate_key = "bep20_usdt_rate" if network == "bep20" else "trc20_usdt_rate"
+            min_key  = "bep20_min_usdt"  if network == "bep20" else "trc20_min_usdt"
+            rate     = float(await self.db.get_setting(rate_key, "1.00"))
+            min_usdt = float(await self.db.get_setting(min_key, "1.00"))
 
             if paid < min_usdt:
                 await self.bot.edit_message_text(

@@ -1,10 +1,6 @@
 """
-notifier.py — قناة إشعارات التفعيل
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+notifier.py — قناة إشعارات التفعيل (telebot)
 • ترسل إشعاراً عند نجاح العملية فقط
-• محتوى الرسالة: الدولة، الرقم (مخفي جزئياً)، الخدمة، الوقت
-• تضيف زر "🟢 أونلاين" برابط القناة
-• لا تُرسل أي شيء عند الفشل أو الإلغاء
 """
 from __future__ import annotations
 
@@ -12,20 +8,17 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from aiogram import Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 logger = logging.getLogger(__name__)
 
 
 def _mask_number(number: str) -> str:
-    """يخفي الجزء الأوسط من الرقم: +9665****1234"""
     n = number.replace(" ", "")
     if len(n) <= 7:
         return n
-    prefix = n[:5]          # مثل: +9665
-    suffix = n[-4:]         # آخر 4 أرقام
+    prefix = n[:5]
+    suffix = n[-4:]
     stars  = "*" * (len(n) - len(prefix) - len(suffix))
     return f"{prefix}{stars}{suffix}"
 
@@ -36,19 +29,9 @@ _SVC_LABELS = {
     "wa_s2": "💬 WhatsApp Server 2",
 }
 
-_SVC_EMOJI = {
-    "tg":    "✈️",
-    "wa_s1": "💬",
-    "wa_s2": "💬",
-}
-
 
 class ActivationNotifier:
-    """
-    مسؤول عن إرسال إشعارات القناة عند نجاح العملية.
-    """
-
-    def __init__(self, bot: Bot, channel_id: Optional[str], channel_link: Optional[str]):
+    def __init__(self, bot, channel_id: Optional[str], channel_link: Optional[str]):
         self.bot          = bot
         self.channel_id   = channel_id
         self.channel_link = channel_link
@@ -57,33 +40,18 @@ class ActivationNotifier:
         return bool(self.channel_id and self.channel_id.strip())
 
     def _build_keyboard(self) -> Optional[InlineKeyboardMarkup]:
-        """يبني زر 🟢 أونلاين برابط القناة."""
         if not self.channel_link:
             return None
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(
-            text="🟢 أونلاين",
-            url=self.channel_link,
-        ))
-        return b.as_markup()
+        kb = InlineKeyboardMarkup()
+        kb.row(InlineKeyboardButton(text="🟢 أونلاين", url=self.channel_link))
+        return kb
 
-    def _build_message(
-        self,
-        service_key: str,
-        number: str,
-        country_flag: str,
-        country_name: str,
-        price: float,
-    ) -> str:
-        """يبني نص رسالة القناة."""
+    def _build_message(self, service_key, number, country_flag, country_name, price) -> str:
         svc_label  = _SVC_LABELS.get(service_key, service_key)
         masked_num = _mask_number(number)
-        now_utc    = datetime.now(timezone.utc)
-        # توقيت +3 (السعودية / مصر / تركيا)
-        local_time = now_utc + timedelta(hours=3)
+        local_time = datetime.now(timezone.utc) + timedelta(hours=3)
         time_str   = local_time.strftime("%H:%M:%S")
         date_str   = local_time.strftime("%Y-%m-%d")
-
         return (
             f"✅ <b>تفعيل ناجح</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -97,50 +65,29 @@ class ActivationNotifier:
         )
 
     async def notify_success(
-        self,
-        service_key: str,
-        number: str,
-        country_code: str,
-        country_flag: str,
-        country_name: str,
-        price: float,
+        self, service_key, number, country_code, country_flag, country_name, price
     ) -> None:
-        """
-        يرسل إشعار النجاح للقناة.
-        يتجاهل الأخطاء بصمت حتى لا يؤثر على تجربة المستخدم.
-        """
         if not self._is_configured():
             return
-
         try:
-            text = self._build_message(
-                service_key=service_key,
-                number=number,
-                country_flag=country_flag,
-                country_name=country_name,
-                price=price,
-            )
-            kb = self._build_keyboard()
-
+            text = self._build_message(service_key, number, country_flag, country_name, price)
+            kb   = self._build_keyboard()
             await self.bot.send_message(
-                chat_id     = self.channel_id,
-                text        = text,
-                reply_markup= kb,
-                parse_mode  = "HTML",
+                self.channel_id, text, reply_markup=kb, parse_mode="HTML"
             )
-            logger.info("[Notifier] Sent to channel: %s %s", service_key, _mask_number(number))
+            logger.info("[Notifier] Sent: %s %s", service_key, _mask_number(number))
         except Exception as exc:
-            logger.warning("[Notifier] Failed to send channel notification: %s", exc)
+            logger.warning("[Notifier] Failed: %s", exc)
 
 
-# ── Factory (يُنشأ في main.py بعد تحميل الإعدادات) ──────────────
+# ── Singleton ──────────────────────────────────────────────────────
 _notifier: Optional[ActivationNotifier] = None
 
 
-def init_notifier(bot: Bot, channel_id: str, channel_link: str) -> None:
+def init_notifier(bot, channel_id: str, channel_link: str) -> None:
     global _notifier
     _notifier = ActivationNotifier(bot, channel_id, channel_link)
-    logger.info("[Notifier] Initialised with channel_id=%s", channel_id or "NOT SET")
+    logger.info("[Notifier] channel_id=%s", channel_id or "NOT SET")
 
 
 def get_notifier() -> Optional[ActivationNotifier]:

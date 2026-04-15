@@ -1,41 +1,44 @@
-"""middlewares.py — User registration, lang injection, ban check"""
+"""middlewares.py — User registration, lang injection, ban check (telebot)"""
 from __future__ import annotations
-from typing import Any, Awaitable, Callable, Dict
-from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject, Update
+
+from telebot.asyncio_handler_backends import BaseMiddleware, CancelUpdate
+from telebot.types import Message, CallbackQuery
+
 from database import db
 from strings import t
 
 
 class UserMiddleware(BaseMiddleware):
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
-        event: Update,
-        data: Dict[str, Any],
-    ) -> Any:
-        user = None
-        if isinstance(event, Update):
-            if event.message:
-                user = event.message.from_user
-            elif event.callback_query:
-                user = event.callback_query.from_user
+    """
+    يُسجّل المستخدم، يحقن lang، ويتحقق من الحظر.
+    """
+    update_types = ["message", "callback_query"]
 
-        if user is None:
-            return await handler(event, data)
+    async def pre_process(self, update: Message | CallbackQuery, data: dict):
+        if isinstance(update, Message):
+            user = update.from_user
+        elif isinstance(update, CallbackQuery):
+            user = update.from_user
+        else:
+            return
+
+        if not user:
+            return
 
         await db.upsert_user(user.id, user.username, user.full_name)
         lang = await db.get_user_lang(user.id)
         data["lang"] = lang
 
         if await db.is_banned(user.id):
+            from main import bot
             try:
-                if isinstance(event, Update) and event.message:
-                    await event.message.answer(t("banned", lang))
-                elif isinstance(event, Update) and event.callback_query:
-                    await event.callback_query.answer(t("banned", lang), show_alert=True)
+                if isinstance(update, Message):
+                    await bot.send_message(update.chat.id, t("banned", lang))
+                elif isinstance(update, CallbackQuery):
+                    await bot.answer_callback_query(update.id, t("banned", lang), show_alert=True)
             except Exception:
                 pass
-            return
+            return CancelUpdate()
 
-        return await handler(event, data)
+    async def post_process(self, update, data, exception):
+        pass
